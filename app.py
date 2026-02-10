@@ -7,6 +7,7 @@ import pandas as pd
 from data import MOCK_COMPANIES
 from engine import calculate_risk_factors, calculate_pwmoic, legacy_to_overrides
 from agents import analyze_company_text
+from utils import extract_text_from_file
 
 st.set_page_config(
     page_title="The Draper Scout | Deep Tech",
@@ -46,6 +47,7 @@ def build_waterfall_chart(risk_result: dict) -> go.Figure:
     Bar 4: Team Multiplier impact (green boost in absolute terms)
     Bar 5: Draper Alpha impact
     Final: P_Success
+    Uses reason_* from waterfall_data for hovertemplate.
     """
     wf = risk_result.get("waterfall_data", {})
     p_success = risk_result.get("p_success", 0)
@@ -67,6 +69,17 @@ def build_waterfall_chart(risk_result: dict) -> go.Figure:
     y_values = [step1, step2, step3, step4, step5, p_success]
     measure = ["absolute", "relative", "relative", "relative", "relative", "total"]
 
+    # Reasons for hover (default "—" if missing); use list of lists for per-point customdata
+    reason_list = [
+        wf.get("reason_step1_tech", "—"),
+        wf.get("reason_step2_market", "—"),
+        wf.get("reason_step3_scale", "—"),
+        wf.get("reason_step4_team", "—"),
+        wf.get("reason_step5_alpha", "—"),
+        "—",
+    ]
+    customdata = [[r] for r in reason_list]
+
     def fmt(v: float) -> str:
         if abs(v) < 0.001:
             return "0"
@@ -80,6 +93,8 @@ def build_waterfall_chart(risk_result: dict) -> go.Figure:
             y=y_values,
             text=[fmt(v) for v in y_values],
             textposition="outside",
+            customdata=customdata,
+            hovertemplate="Value: %{y:.3f}<br>Reason: %{customdata[0]}<extra></extra>",
             connector={"line": {"color": "#6c757d", "width": 1, "dash": "dot"}},
             increasing={"marker": {"color": "#22c55e"}},
             decreasing={"marker": {"color": "#ef4444"}},
@@ -177,20 +192,26 @@ def render_main_panel(
             """)
         st.markdown("")
         math_tables = risk_result.get("math_tables", {})
-        cols = ["Factor", "User Input", "Assigned Score", "Weight", "Contribution"]
+        cols = ["Factor", "User Input", "Assigned Score", "Weight", "Contribution", "Rationale"]
+        rationale_config = {"Rationale": st.column_config.TextColumn("Rationale", width="large", help="Score justification from profile or agent.")}
+        def _pad_row(row, n=6):
+            r = list(row)
+            while len(r) < n:
+                r.append("—")
+            return r[:n]
 
         st.markdown("#### 1. Sub-Factors (Weighted Averages, 0–1 Quality Scores)")
         st.markdown("**P_Tech_Sub** = TRL (30%) + IP (20%) + Complexity (15%) + Platform (20%) + Integration (15%)")
-        df_tech = pd.DataFrame(math_tables.get("tech", []), columns=cols)
-        st.dataframe(df_tech, use_container_width=True, hide_index=True)
+        df_tech = pd.DataFrame([_pad_row(r) for r in math_tables.get("tech", [])], columns=cols)
+        st.dataframe(df_tech, use_container_width=True, hide_index=True, column_config=rationale_config)
 
         st.markdown("**P_Market_Sub** = Dual Use (30%) + Urgency (25%) + CAGR (20%) + Moat (25%)  *(Miracle Tech → 1.0)*")
-        df_market = pd.DataFrame(math_tables.get("market", []), columns=cols)
-        st.dataframe(df_market, use_container_width=True, hide_index=True)
+        df_market = pd.DataFrame([_pad_row(r) for r in math_tables.get("market", [])], columns=cols)
+        st.dataframe(df_market, use_container_width=True, hide_index=True, column_config=rationale_config)
 
         st.markdown("**P_Scale_Sub** = Regulatory (20%) + MRL (30%) + R&D Time (20%) + Supply Chain (30%)")
-        df_scale = pd.DataFrame(math_tables.get("scale", []), columns=cols)
-        st.dataframe(df_scale, use_container_width=True, hide_index=True)
+        df_scale = pd.DataFrame([_pad_row(r) for r in math_tables.get("scale", [])], columns=cols)
+        st.dataframe(df_scale, use_container_width=True, hide_index=True, column_config=rationale_config)
 
         st.markdown("#### 2. Base Probability & Final (Multiplicative Waterfall)")
         st.markdown("**Base_Probability** = P_Tech_Sub × P_Market_Sub × P_Scale_Sub  *(if any pillar = 0, deal dies)*")
@@ -248,8 +269,19 @@ st.sidebar.markdown("### ⚙️ Configuration")
 mode = st.sidebar.selectbox("Choose Mode", ["Demo Data", "Live Analysis"], index=0)
 company = st.sidebar.selectbox("Select Company", list(MOCK_COMPANIES.keys()), index=0)
 
+uploaded_pitch_deck = st.sidebar.file_uploader(
+    "Upload Pitch Deck",
+    type=["pdf", "pptx", "docx", "txt"],
+    help="PDF, PowerPoint, Word, or TXT. Text is extracted and used as Ground Truth for analysis and valuation.",
+)
+
 data = MOCK_COMPANIES.get(company, {}) if mode == "Demo Data" else {}
 defaults = legacy_to_overrides(data)
+# Score justifications: from company profile (Demo) or last agent run (Live)
+reasons = data if (mode == "Demo Data" and data) else st.session_state.get("agent_reasons", {})
+
+def _help(key: str, _fallback: str = "") -> str:
+    return f"Score Justification: {reasons.get(key) or 'No data.'}"
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ⚙️ Overrides")
@@ -258,49 +290,49 @@ with st.sidebar.expander("🔬 The Physics (Technical Inputs)", expanded=True):
     trl = st.slider(
         "TRL Level (1–9)",
         1, 9, defaults.get("trl_level", 5), 1,
-        help="Technology Readiness Level. 1=Concept, 5=Lab Validated, 9=System Proven.",
+        help=_help("trl_reason", "Technology Readiness Level. 1=Concept, 5=Lab Validated, 9=System Proven."),
     )
     ip_score = st.slider(
         "IP Score (0.0=None, 0.5=Pending, 1.0=Granted)",
         0.0, 1.0, float(defaults.get("ip_score", 0.5)), 0.05,
-        help="Patent strength. Granted IP protects defensibility; Pending shows intent.",
+        help=_help("ip_reason", "Patent strength. Granted IP protects defensibility; Pending shows intent."),
     )
     complexity_score = st.slider(
         "Complexity Score (0.3=New Science … 0.9=Software)",
         0.0, 1.0, float(defaults.get("complexity_score", 0.6)), 0.05,
-        help="New Science (0.3) = unproven physics. Software (0.9) = faster iteration.",
+        help=_help("complexity_reason", "New Science (0.3) = unproven physics. Software (0.9) = faster iteration."),
     )
     platform_potential = st.slider(
         "Platform Potential (0.0–1.0)",
         0.0, 1.0, float(defaults.get("platform_potential", 0.5)), 0.05,
-        help="Does it enable multiple product lines? 0.2=Single product, 0.5=Some extensibility, 1.0=Ecosystem/vertical expansion.",
+        help=_help("platform_potential_reason", "Does it enable multiple product lines? 0.2=Single product, 0.5=Some extensibility, 1.0=Ecosystem."),
     )
     integration_friction = st.slider(
         "Integration Friction (0.0–1.0)",
         0.0, 1.0, float(defaults.get("integration_friction", 0.5)), 0.05,
-        help="1.0=Drop-in / plug-and-play. 0.2=Infrastructure overhaul / system retrofit required.",
+        help=_help("integration_friction_reason", "1.0=Drop-in / plug-and-play. 0.2=Infrastructure overhaul / system retrofit required."),
     )
 
 with st.sidebar.expander("📊 The Market (Future Bet Pillar)", expanded=True):
     dual_use_score = st.slider(
         "Dual-Use Score (0.5=Commercial … 0.95=Dual)",
         0.0, 1.0, float(defaults.get("dual_use_score", 0.5)), 0.05,
-        help="Dual Use = Gov + Commercial demand (defense, energy). Higher = more TAM.",
+        help=_help("dual_use_reason", "Dual Use = Gov + Commercial demand (defense, energy). Higher = more TAM."),
     )
     urgency_score = st.slider(
         "Urgency Score (0.0–1.0)",
         0.0, 1.0, float(defaults.get("urgency_score", 0.5)), 0.05,
-        help="How critical is the problem? 0.1=Vitamin (nice to have), 0.9=Painkiller (critical/life-saving).",
+        help=_help("urgency_reason", "How critical is the problem? 0.1=Vitamin (nice to have), 0.9=Painkiller (critical/life-saving)."),
     )
     market_cagr = st.slider(
         "Market CAGR (0.0–1.0)",
         0.0, 1.0, float(defaults.get("market_cagr", 0.5)), 0.05,
-        help="Compound Annual Growth Rate. VCs target >20%. 0.5 ≈ 20%, 0.8 ≈ 30%+.",
+        help=_help("market_cagr_reason", "Compound Annual Growth Rate. VCs target >20%. 0.5 ≈ 20%, 0.8 ≈ 30%+."),
     )
     moat_score = st.slider(
         "Moat Score (0.0–1.0)",
         0.0, 1.0, float(defaults.get("moat_score", 0.5)), 0.05,
-        help="Network effects, switching costs, proprietary data. 0.2=Commodity, 1.0=Strong lock-in.",
+        help=_help("moat_reason", "Network effects, switching costs, proprietary data. 0.2=Commodity, 1.0=Strong lock-in."),
     )
     is_miracle_tech = st.checkbox(
         "🧪 Miracle Tech (Infinite Demand)",
@@ -312,22 +344,22 @@ with st.sidebar.expander("🏭 The Scale (Lab-to-Fab Pillar)", expanded=True):
     mrl_score = st.slider(
         "MRL Level (1–9)",
         1, 9, int(defaults.get("mrl_score", 5)), 1,
-        help="Manufacturing Readiness Level. 1=Basic Research, 4=Prototype, 8=Pilot Line, 9=Mass Production.",
+        help=_help("mrl_reason", "Manufacturing Readiness Level. 1=Basic Research, 4=Prototype, 8=Pilot Line, 9=Mass Production."),
     )
     rnd_years = st.slider(
         "Years to Launch",
         0.0, 10.0, float(defaults.get("rnd_years", 5.0)), 0.5,
-        help="Years until commercial launch. Deep Tech avg is 5–7 years.",
+        help=_help("rnd_reason", "Years until commercial launch. Deep Tech avg is 5–7 years."),
     )
     regulatory_score = st.slider(
         "Regulatory Score (0.0–1.0)",
         0.0, 1.0, float(defaults.get("regulatory_score", 0.5)), 0.05,
-        help="0.2=Complex (FDA, NRC). 0.8=Clear path to market.",
+        help=_help("regulatory_reason", "0.2=Complex (FDA, NRC). 0.8=Clear path to market."),
     )
     supply_chain_risk = st.slider(
         "Supply Chain Risk (0.0–1.0)",
         0.0, 1.0, float(defaults.get("supply_chain_risk", 0.5)), 0.05,
-        help="1.0=Domestic/Friendly sourcing. 0.0=Hostile dependency or single-source (e.g. rare earths, China).",
+        help=_help("supply_chain_reason", "1.0=Domestic/Friendly sourcing. 0.0=Hostile dependency or single-source (e.g. rare earths, China)."),
     )
 
 with st.sidebar.expander("👥 The Team (Super Founder Matrix)", expanded=True):
@@ -355,15 +387,33 @@ with st.sidebar.expander("👥 The Team (Super Founder Matrix)", expanded=True):
         help="Balanced = best. All Scientists = execution risk. All Biz = technical credibility risk.",
     )
 
+# Agent exit estimates: from company profile (Demo) or last run (Live)
+if mode == "Demo Data" and data:
+    agent_exit_data = data
+else:
+    agent_exit_data = st.session_state.get("agent_exit_estimates", {})
+
 with st.sidebar.expander("💰 The Money (Financial Scenarios)", expanded=True):
-    entry_val = data.get("entry_valuation", 15.0) if data else 15.0
+    entry_val = data.get("entry_valuation", data.get("estimated_entry_val", 15.0)) if data else 15.0
     entry_valuation = st.slider(
-        "Entry Valuation ($M)", 5.0, 100.0, float(entry_val), 1.0,
+        "Entry Valuation ($M)", 5.0, 20000.0, float(min(max(entry_val, 5.0), 20000.0)), 10.0,
         help="Pre-money valuation at investment. Affects MOIC directly.",
+    )
+    default_base = float(agent_exit_data.get("estimated_base_exit", 200))
+    default_home_run = float(agent_exit_data.get("estimated_home_run_exit", 2000))
+    target_base_exit = st.slider(
+        "Target Base Exit ($M)",
+        10.0, 1000.0, default_base, 10.0,
+        help=f"The 'Strategic Sale' scenario (e.g., acquired by Google/Lockheed). Agent estimates: ${default_base:.0f}M.",
+    )
+    target_home_run_exit = st.slider(
+        "Target Home Run Exit ($M)",
+        500.0, 50000.0, default_home_run, 500.0,
+        help=f"The 'IPO / Power Law' scenario. Agent estimates: ${default_home_run:.0f}M.",
     )
     home_run_split = st.slider(
         "Home Run Ratio", 0.1, 0.9, 0.2, 0.05,
-        help="Split of success cases that become Home Run ($2B exit) vs Base Case ($200M).",
+        help="Split of success cases that become Home Run vs Base Case.",
     )
     time_to_exit_years = st.slider(
         "Time to Exit (Years)", 3, 15, 7, 1,
@@ -422,28 +472,47 @@ with st.expander("📖 What is PWMOIC? Understanding the Model", expanded=False)
 st.markdown("---")
 
 # ——— Main Panel ———
+# Reasons for dashboard (Math tab + Waterfall): from company profile (Demo) or last agent run (Live)
+current_reasons = data if (mode == "Demo Data" and data) else st.session_state.get("agent_reasons", {})
+
 if mode == "Demo Data":
-    risk_result = calculate_risk_factors(overrides)
+    risk_result = calculate_risk_factors(overrides, reasons_dict=current_reasons)
     pwmoic_result = calculate_pwmoic(
         risk_result["p_success"],
         entry_valuation,
         home_run_split,
         time_to_exit_years,
+        base_exit_val=target_base_exit,
+        home_run_exit_val=target_home_run_exit,
     )
     pwmoic_result["time_to_exit_years"] = time_to_exit_years
     render_main_panel(risk_result, pwmoic_result, company or "", is_miracle_tech)
 else:
-    st.markdown("**Live Analysis** — Paste company text below.")
-    text_content = st.text_area("Paste Company Homepage/About Us Text", height=180, placeholder="Paste text...")
+    st.markdown("**Live Analysis** — Upload a pitch deck and/or paste company text below.")
+    pitch_deck_text = ""
+    if uploaded_pitch_deck:
+        pitch_deck_text = extract_text_from_file(uploaded_pitch_deck)
+        if not pitch_deck_text and uploaded_pitch_deck.name:
+            st.warning(f"Could not extract text from {uploaded_pitch_deck.name}. You can still paste text below.")
+    text_content = st.text_area("Paste Company Homepage/About Us Text (optional if pitch deck uploaded)", height=180, placeholder="Paste text...")
     if st.button("Run Draper Scout", type="primary"):
         if not api_key:
             st.error("Please enter your OpenAI API key.")
-        elif not (text_content or "").strip():
-            st.error("Please paste company text.")
+        elif not (text_content or "").strip() and not (pitch_deck_text or "").strip():
+            st.error("Please upload a pitch deck or paste company text.")
         else:
+            filename = getattr(uploaded_pitch_deck, "name", None) if uploaded_pitch_deck else None
+            if filename:
+                st.info(f"📄 Analyzing **{filename}**...")
             with st.spinner("Analyzing with GPT-4o..."):
                 try:
-                    metrics = analyze_company_text(api_key, text_content)
+                    metrics = analyze_company_text(
+                        api_key,
+                        text_content or pitch_deck_text,
+                        pitch_deck_text=pitch_deck_text if pitch_deck_text else None,
+                        company_name=company if mode == "Live Analysis" else None,
+                    )
+                    entry_valuation_used = metrics.get("entry_valuation", entry_valuation)
                     ai_overrides = {
                         "trl_level": int(metrics.get("trl_score", 5)),
                         "mrl_score": int(metrics.get("mrl_score", 5)),
@@ -468,14 +537,30 @@ else:
                         "sentiment": "Neutral",
                     }
                     merged = {**ai_overrides, **overrides}
-                    risk_result = calculate_risk_factors(merged)
+                    risk_result = calculate_risk_factors(merged, reasons_dict=st.session_state.get("agent_reasons", {}))
+                    base_exit_used = metrics.get("estimated_base_exit", target_base_exit)
+                    home_run_exit_used = metrics.get("estimated_home_run_exit", target_home_run_exit)
+                    st.session_state["agent_exit_estimates"] = {
+                        "estimated_base_exit": base_exit_used,
+                        "estimated_home_run_exit": home_run_exit_used,
+                    }
+                    st.session_state["agent_reasons"] = {
+                        k: v for k, v in metrics.items()
+                        if isinstance(k, str) and k.endswith("_reason") and v
+                    }
                     pwmoic_result = calculate_pwmoic(
                         risk_result["p_success"],
-                        entry_valuation,
+                        entry_valuation_used,
                         home_run_split,
                         time_to_exit_years,
+                        base_exit_val=target_base_exit,
+                        home_run_exit_val=target_home_run_exit,
                     )
                     pwmoic_result["time_to_exit_years"] = time_to_exit_years
                     render_main_panel(risk_result, pwmoic_result, "", is_miracle_tech)
+                    if metrics.get("discrepancy_note"):
+                        st.warning(metrics["discrepancy_note"])
+                    if metrics.get("valuation_is_stale"):
+                        st.warning("⚠️ Document may be over 1 year old; consider verifying valuation with a web search.")
                 except (ValueError, Exception) as e:
                     st.error(str(e))

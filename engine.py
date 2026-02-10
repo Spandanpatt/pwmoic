@@ -96,14 +96,24 @@ def _rnd_score(years: float) -> float:
     return 0.2
 
 
-def calculate_risk_factors(overrides: RiskOverrides | dict[str, Any]) -> dict:
+def calculate_risk_factors(
+    overrides: RiskOverrides | dict[str, Any],
+    reasons_dict: dict[str, str] | None = None,
+) -> dict:
     """
     V6.0 Multiplicative Waterfall:
     - P_Tech_Sub: TRL 30%, IP 20%, Complexity 15%, Platform 20%, Integration 15%
     - P_Market_Sub: DualUse 30%, Urgency 25%, CAGR 20%, Moat 25% (Miracle Tech override)
     - P_Scale_Sub: Regulatory 20%, MRL 30%, R&D Time 20%, Supply Chain 30%
     - Team & Draper Alpha unchanged.
+    reasons_dict: optional map of reason keys (e.g. dual_use_reason) to justification strings; missing keys default to "-".
     """
+    reasons = reasons_dict if reasons_dict is not None else {}
+
+    def _reason(key: str) -> str:
+        val = reasons.get(key) if isinstance(reasons, dict) else None
+        return (val.strip() if isinstance(val, str) and val.strip() else "-")
+
     trl_raw = overrides.get("trl_level") or overrides.get("trl_score") or 5
     TRL_Score = min(9, max(1, int(trl_raw))) / 9.0
     trl_label = str(int(min(9, max(1, trl_raw))))
@@ -231,26 +241,26 @@ def calculate_risk_factors(overrides: RiskOverrides | dict[str, Any]) -> dict:
         trace["miracle"] = "Miracle Tech enabled: P_Market_Sub = 1.0"
 
     math_tech = [
-        ("TRL Level", trl_label, round(TRL_Score, 3), "30%", round(c_trl, 4)),
-        ("IP Status", ip_label, round(ip_score, 3), "20%", round(c_ip, 4)),
-        ("Tech Complexity", comp_label, round(comp_score, 3), "15%", round(c_comp, 4)),
-        ("Platform Potential", str(round(platform_potential, 2)), round(platform_potential, 3), "20%", round(c_platform, 4)),
-        ("Integration Friction", str(round(integration_friction, 2)), round(integration_friction, 3), "15%", round(c_integration, 4)),
-        ("P_Tech_Sub (sum)", "—", round(P_Tech_Sub, 4), "—", round(P_Tech_Sub, 4)),
+        ("TRL Level", trl_label, round(TRL_Score, 3), "30%", round(c_trl, 4), _reason("trl_reason")),
+        ("IP Status", ip_label, round(ip_score, 3), "20%", round(c_ip, 4), _reason("ip_reason")),
+        ("Tech Complexity", comp_label, round(comp_score, 3), "15%", round(c_comp, 4), _reason("complexity_reason")),
+        ("Platform Potential", str(round(platform_potential, 2)), round(platform_potential, 3), "20%", round(c_platform, 4), _reason("platform_potential_reason")),
+        ("Integration Friction", str(round(integration_friction, 2)), round(integration_friction, 3), "15%", round(c_integration, 4), _reason("integration_friction_reason")),
+        ("P_Tech_Sub (sum)", "—", round(P_Tech_Sub, 4), "—", round(P_Tech_Sub, 4), "—"),
     ]
     math_market = [
-        ("Dual Use", str(round(dual_score, 2)), round(dual_score, 3), "30%", round(c_dual, 4)),
-        ("Urgency", str(round(urgency_score, 2)), round(urgency_score, 3), "25%", round(c_urgency, 4)),
-        ("Market CAGR", str(round(market_cagr, 2)), round(market_cagr, 3), "20%", round(c_cagr, 4)),
-        ("Moat Score", str(round(moat_score, 2)), round(moat_score, 3), "25%", round(c_moat, 4)),
-        ("P_Market_Sub (sum)", "—", round(P_Market_Sub, 4), "—", round(P_Market_Sub, 4)),
+        ("Dual Use", str(round(dual_score, 2)), round(dual_score, 3), "30%", round(c_dual, 4), _reason("dual_use_reason")),
+        ("Urgency", str(round(urgency_score, 2)), round(urgency_score, 3), "25%", round(c_urgency, 4), _reason("urgency_reason")),
+        ("Market CAGR", str(round(market_cagr, 2)), round(market_cagr, 3), "20%", round(c_cagr, 4), _reason("market_cagr_reason")),
+        ("Moat Score", str(round(moat_score, 2)), round(moat_score, 3), "25%", round(c_moat, 4), _reason("moat_reason")),
+        ("P_Market_Sub (sum)", "—", round(P_Market_Sub, 4), "—", round(P_Market_Sub, 4), "—"),
     ]
     math_scale = [
-        ("Regulatory Path", str(round(reg_score, 2)), round(reg_score, 3), "20%", round(c_reg, 4)),
-        ("MRL Score", str(mrl_score), round(c_mrl, 3), "30%", round(c_mrl * W_MRL, 4)),
-        ("R&D Time Risk", str(round(rnd_years, 1)), round(c_rnd, 3), "20%", round(c_rnd * W_RND, 4)),
-        ("Supply Chain Risk", str(round(supply_chain_risk, 2)), round(supply_chain_risk, 3), "30%", round(c_supply, 4)),
-        ("P_Scale_Sub (sum)", "—", round(P_Scale_Sub, 4), "—", round(P_Scale_Sub, 4)),
+        ("Regulatory Path", str(round(reg_score, 2)), round(reg_score, 3), "20%", round(c_reg, 4), _reason("regulatory_reason")),
+        ("MRL Score", str(mrl_score), round(c_mrl, 3), "30%", round(c_mrl * W_MRL, 4), _reason("mrl_reason")),
+        ("R&D Time Risk", str(round(rnd_years, 1)), round(c_rnd, 3), "20%", round(c_rnd * W_RND, 4), _reason("rnd_reason")),
+        ("Supply Chain Risk", str(round(supply_chain_risk, 2)), round(supply_chain_risk, 3), "30%", round(c_supply, 4), _reason("supply_chain_reason")),
+        ("P_Scale_Sub (sum)", "—", round(P_Scale_Sub, 4), "—", round(P_Scale_Sub, 4), "—"),
     ]
     team_desc = []
     if team_has_phd:
@@ -313,6 +323,11 @@ def calculate_risk_factors(overrides: RiskOverrides | dict[str, Any]) -> dict:
             "P_Scale_Sub": P_Scale_Sub,
             "multiplier": Multiplier,
             "draper_alpha": Draper_Alpha,
+            "reason_step1_tech": " | ".join(x for x in [_reason("trl_reason"), _reason("ip_reason"), _reason("complexity_reason"), _reason("platform_potential_reason"), _reason("integration_friction_reason")] if x != "-") or "—",
+            "reason_step2_market": " | ".join(x for x in [_reason("dual_use_reason"), _reason("urgency_reason"), _reason("market_cagr_reason"), _reason("moat_reason")] if x != "-") or "—",
+            "reason_step3_scale": " | ".join(x for x in [_reason("regulatory_reason"), _reason("mrl_reason"), _reason("rnd_reason"), _reason("supply_chain_reason")] if x != "-") or "—",
+            "reason_step4_team": "—",
+            "reason_step5_alpha": "—",
         },
         "trace": trace,
         "math_tables": {
@@ -329,23 +344,25 @@ def calculate_pwmoic(
     entry_valuation: float,
     home_run_split: float,
     time_to_exit_years: int = 7,
+    base_exit_val: float = 200.0,
+    home_run_exit_val: float = 2000.0,
 ) -> dict:
-    """PWMOIC + IRR (Time Value of Money)."""
+    """PWMOIC + IRR (Time Value of Money). Uses dynamic base/home-run exit values ($M)."""
     p_success = min(1.0, max(0.0, p_success))
     home_run_split = min(1.0, max(0.0, home_run_split))
     entry_valuation = max(0.1, entry_valuation)
     time_to_exit_years = max(1, int(time_to_exit_years))
+    exit_val_base = max(1.0, float(base_exit_val))
+    exit_val_home_run = max(1.0, float(home_run_exit_val))
 
     prob_failure = 1.0 - p_success
     moic_failure = 0.5
 
     prob_base = p_success * (1.0 - home_run_split)
-    exit_val_base = 200.0
     dilution_base = 0.5
     moic_base = (exit_val_base / entry_valuation) * (1.0 - dilution_base)
 
     prob_home_run = p_success * home_run_split
-    exit_val_home_run = 2000.0
     dilution_home_run = 0.7
     moic_home_run = (exit_val_home_run / entry_valuation) * (1.0 - dilution_home_run)
 
